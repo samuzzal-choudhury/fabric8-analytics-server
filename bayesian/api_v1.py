@@ -573,7 +573,7 @@ class StackAnalyses(ResourceWithSchema):
         decoded = decode_token()
         github_url = request.form.get("github_url")
         if github_url is not None:
-            files = GithubRead().get_files_github_url(github_url)
+            files = GithubRead().get_manifest_details(github_url)
         else:
             files = request.files.getlist('manifest[]')
             filepaths = request.values.getlist('filePath[]')
@@ -596,7 +596,15 @@ class StackAnalyses(ResourceWithSchema):
             if github_url is not None:
                 filename = manifest_file_raw.get('filename', None)
                 filepath = manifest_file_raw.get('filepath', None)
-                content = manifest_file_raw.get('content')
+                download_url = manifest_file_raw.get('download_url')
+                try:
+                    response = requests.get(download_url)
+                    if response.status_code == 200:
+                        content = response.text
+                except request.exceptions.RequestException as e:
+                    current_app.logger.warn('contents for manifest file {}/{} could not be downloaded. '\
+                            'continuing with other manifest files in the GitHub repo'.format(filepath,filename))
+                    continue
             else:
                 filename = manifest_file_raw.filename
                 filepath = filepaths[index]
@@ -606,42 +614,16 @@ class StackAnalyses(ResourceWithSchema):
             manifest_descriptor = get_manifest_descriptor_by_filename(filename)
             if manifest_descriptor is None:
                 raise HTTPError(400, error="Manifest file '{filename}' is not supported".format(filename=filename))
-            
-            # In memory file to be passed as an API parameter to /appstack
-            manifest_file = StringIO(content)
 
             # Check if the manifest is valid
             if not manifest_descriptor.validate(content):
                 raise HTTPError(400, error="Error processing request. Please upload a valid manifest file '{filename}'"
                                 .format(filename=filename))
 
-            # appstack API call
-            # Limitation: Currently, appstack can support only package.json
-            #             The following condition is to be reworked
-            appstack_id = ''
-            if 'package.json' in filename:
-                appstack_files = {'packagejson': manifest_file}
-                url = current_app.config["BAYESIAN_ANALYTICS_URL"]
-                endpoint = "{analytics_baseurl}/api/v1.0/appstack".format(analytics_baseurl=url)
-                try:
-                    response = requests.post(endpoint, files=appstack_files)
-                except Exception as exc:
-                    current_app.logger.warn("Analytics query: {}".format(exc))
-                else:
-                    if response.status_code == 200:
-                        resp = response.json()
-                        appstack_id = resp.get('appstack_id', '')
-                    else:
-                        current_app.logger.warn("{status}: {error}".format(status=response.status_code,
-                                                                           error=response.content))
-
             # Record the response details for this manifest file
             manifest = {'filename': filename, 'content': content, 'ecosystem': manifest_descriptor.ecosystem, 'filepath': filepath}
-            if appstack_id != '':
-                manifest['appstack_id'] = appstack_id
-
             manifests.append(manifest)
-
+        
         # Insert in a single commit. Gains - a) performance, b) avoid insert inconsistencies for a single request
         try:
             req = StackAnalysisRequest(
