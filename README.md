@@ -73,7 +73,7 @@ tests:
     (bayesian) $ python -m pip install -r requirements.txt
     (bayesian) $ python -m pip install -r tests/requirements.txt
 
-The marked offline tests can then be run as:
+The marked offline tests can then be run as: 
 
     (bayesian) $ py.test -m offline tests/
 
